@@ -52,7 +52,14 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider
         .GetRequiredService<RoomBookingDbContext>();
 
-    dbContext.Database.Migrate();
+    if (dbContext.Database.IsRelational())
+    {
+        dbContext.Database.Migrate();
+    }
+    else
+    {
+        dbContext.Database.EnsureCreated();
+    }
 }
 
 if (app.Environment.IsDevelopment())
