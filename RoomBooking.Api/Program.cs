@@ -1,3 +1,7 @@
+using RoomBooking.Api.Errors;
+
+using RoomBooking.Infrastructure.Repositories;
+
 using Microsoft.EntityFrameworkCore;
 using RoomBooking.Api.DTOs;
 using RoomBooking.Domain;
@@ -6,6 +10,10 @@ using RoomBooking.Infrastructure.Data;
 using RoomBooking.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddProblemDetails();
+
+builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
 builder.Services.Configure<BookingOptions>(
     builder.Configuration.GetSection(BookingOptions.SectionName)
@@ -23,6 +31,11 @@ builder.Services.AddDbContext<RoomBookingDbContext>(options =>
     options.UseNpgsql(connectionString)
 );
 
+builder.Services.AddScoped<
+    IBookingRepository,
+    EfBookingRepository
+>();
+
 
 // ==========================================================
 // BUILD APPLICATION
@@ -31,6 +44,8 @@ builder.Services.AddDbContext<RoomBookingDbContext>(options =>
 var app = builder.Build();
 
 app.UseMiddleware<RequestLoggingMiddleware>();
+
+app.UseExceptionHandler();
 
 // ==========================================================
 // ROOMS ENDPOINTS
@@ -224,35 +239,46 @@ var bookingsGroup = app.MapGroup("/bookings");
 
 bookingsGroup.MapPost("/", async (
     CreateBookingRequest request,
-    RoomBookingDbContext dbContext
+    RoomBookingDbContext dbContext,
+    IBookingRepository repository,
+    Microsoft.Extensions.Options.IOptions<BookingOptions> options
 ) =>
 {
-    var room = await dbContext.Rooms
+    var rooms = await dbContext.Rooms
         .AsNoTracking()
-        .FirstOrDefaultAsync(r => r.Id == request.RoomId);
+        .ToListAsync();
 
-    if (room is null)
-    {
-        return Results.NotFound(
-            $"Room {request.RoomId} not found"
-        );
-    }
+    var bookings = await dbContext.Bookings
+        .AsNoTracking()
+        .ToListAsync();
 
-    var booking = new Booking
-    {
-        // ID generato automaticamente dal database
-        Id = 0,
+    var service = new BookingService(
+        rooms,
+        bookings,
+        repository,
+        options
+    );
 
-        RoomId = request.RoomId,
-        User = request.User,
-        Start = request.Start,
-        End = request.End,
-        Attendees = request.Attendees
-    };
+    var nextId = 0L;
 
-    dbContext.Bookings.Add(booking);
+    var startUtc = DateTime.SpecifyKind(
+        request.Start,
+        DateTimeKind.Utc
+    );
 
-    await dbContext.SaveChangesAsync();
+    var endUtc = DateTime.SpecifyKind(
+        request.End,
+        DateTimeKind.Utc
+    );
+
+    var booking = await service.BookAsync(
+        nextId,
+        request.RoomId,
+        request.User,
+        startUtc,
+        endUtc,
+        request.Attendees
+    );
 
     return Results.Created(
         $"/bookings/{booking.Id}",

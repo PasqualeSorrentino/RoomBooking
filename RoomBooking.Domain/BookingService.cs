@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using RoomBooking.Domain.Exceptions;
 
 namespace RoomBooking.Domain;
 
@@ -36,15 +37,19 @@ public class BookingService
         var room = _rooms.FirstOrDefault(r => r.Id == roomId);
         if (room == null)
         {
-            throw new ArgumentException($"Room with id {roomId} does not exist.");
+            throw new RoomNotFoundException(roomId);
         }
         if (attendees > room.Capacity)
         {
-            throw new ArgumentException($"Number of attendees {attendees} exceeds room capacity {room.Capacity}.");
+            throw new BookingValidationException(
+                "Number of attendees exceeds room capacity."
+            );
         }
         if (start.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
         {
-            throw new ArgumentException("Bookings cannot be made on weekends.");
+            throw new BookingValidationException(
+                "Bookings are allowed only on weekdays."
+            );
         }
 
         var openingTime = new TimeOnly(
@@ -62,7 +67,9 @@ public class BookingService
 
         if (startTime < openingTime || endTime > closingTime)
         {
-            throw new ArgumentException("Bookings can only be made between 8:00 and 20:00.");
+            throw new BookingValidationException(
+                $"Bookings are allowed only between {_options.OpeningHour}:00 and {_options.ClosingHour}:00."
+            );
         }
 
         var duration = end - start;
@@ -71,7 +78,9 @@ public class BookingService
             _options.MaxDurationHours
         ))
         {
-            throw new ArgumentException("Bookings cannot exceed 4 hours.");
+            throw new BookingValidationException(
+                $"Booking duration cannot exceed {_options.MaxDurationHours} hours."
+            );
         }
 
         var hasOverlap = _bookings.Any(b =>
@@ -83,7 +92,9 @@ public class BookingService
 
         if (hasOverlap)
         {
-            throw new ArgumentException("The room is already booked for the specified time range.");
+            throw new BookingConflictException(
+                "Room is already booked in the selected time slot."
+            );
         }
 
         var booking = new Booking

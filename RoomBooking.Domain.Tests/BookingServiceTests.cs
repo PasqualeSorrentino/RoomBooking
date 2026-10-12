@@ -1,4 +1,6 @@
 using Microsoft.Extensions.Options;
+using RoomBooking.Domain.Exceptions;
+
 using RoomBooking.Domain;
 
 namespace RoomBooking.Domain.Tests;
@@ -66,7 +68,7 @@ public class BookingServiceTests
         var start = new DateTime(2026, 10, 8, 10, 0, 0);
         var end = new DateTime(2026, 10, 8, 12, 0, 0);
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<RoomNotFoundException>(async () =>
             await service.BookAsync(
                 1,
                 99,
@@ -85,7 +87,7 @@ public class BookingServiceTests
         var start = new DateTime(2026, 10, 8, 10, 0, 0);
         var end = new DateTime(2026, 10, 8, 12, 0, 0);
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingValidationException>(async () =>
             await _service.BookAsync(
                 1,
                 1,
@@ -121,7 +123,7 @@ public class BookingServiceTests
             12, 0, 0
         );
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingValidationException>(async () =>
             await _service.BookAsync(
                 1,
                 1,
@@ -147,7 +149,7 @@ public class BookingServiceTests
             9, 0, 0
         );
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingValidationException>(async () =>
             await _service.BookAsync(
                 1,
                 1,
@@ -173,7 +175,7 @@ public class BookingServiceTests
             20, 30, 0
         );
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingValidationException>(async () =>
             await _service.BookAsync(
                 1,
                 1,
@@ -199,7 +201,7 @@ public class BookingServiceTests
             15, 0, 0
         );
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingValidationException>(async () =>
             await _service.BookAsync(
                 1,
                 1,
@@ -261,7 +263,7 @@ public class BookingServiceTests
             13, 0, 0
         );
 
-        await Assert.ThrowsAsync<ArgumentException>(async () =>
+        await Assert.ThrowsAsync<BookingConflictException>(async () =>
             await service.BookAsync(
                 2,
                 1,
