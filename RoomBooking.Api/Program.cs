@@ -9,7 +9,11 @@ using RoomBooking.Infrastructure.Data;
 
 using RoomBooking.Api.Middleware;
 
+using Scalar.AspNetCore;
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
 
 builder.Services.AddProblemDetails();
 
@@ -43,6 +47,13 @@ builder.Services.AddScoped<
 
 var app = builder.Build();
 
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+
+    app.MapScalarApiReference();
+}
+
 app.UseMiddleware<RequestLoggingMiddleware>();
 
 app.UseExceptionHandler();
@@ -68,7 +79,11 @@ roomsGroup.MapGet("/", async (
         .ToListAsync();
 
     return Results.Ok(rooms);
-});
+})
+.WithName("GetRooms")
+.WithSummary("Get all rooms")
+.WithDescription("Returns all rooms available in the system")
+.Produces<List<Room>>(StatusCodes.Status200OK);
 
 
 // ----------------------------------------------------------
@@ -85,13 +100,15 @@ roomsGroup.MapGet("/{id:long}", async (
         .AsNoTracking()
         .FirstOrDefaultAsync(r => r.Id == id);
 
-    if (room is null)
-    {
-        return Results.NotFound();
-    }
-
-    return Results.Ok(room);
-});
+    return room is null
+        ? Results.NotFound()
+        : Results.Ok(room);
+})
+.WithName("GetRoomById")
+.WithSummary("Get a room by id")
+.WithDescription("Returns a specific room identified by its id.")
+.Produces<Room>(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status404NotFound);
 
 
 // ----------------------------------------------------------
@@ -120,7 +137,12 @@ roomsGroup.MapPost("/", async (
         $"/rooms/{room.Id}",
         room
     );
-});
+})
+.WithName("CreateRoom")
+.WithSummary("Create a room")
+.WithDescription("Creates a new room.")
+.Produces<Room>(StatusCodes.Status201Created)
+.ProducesProblem(StatusCodes.Status400BadRequest);
 
 
 // ----------------------------------------------------------
@@ -167,7 +189,13 @@ roomsGroup.MapPut("/{id:long}", async (
     await dbContext.SaveChangesAsync();
 
     return Results.Ok(updatedRoom);
-});
+})
+.WithName("UpdateRoom")
+.WithSummary("Update a room")
+.WithDescription("Updates the name and capacity of an existing room.")
+.Produces<Room>(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status404NotFound);
 
 
 // ----------------------------------------------------------
@@ -193,7 +221,12 @@ roomsGroup.MapDelete("/{id:long}", async (
     await dbContext.SaveChangesAsync();
 
     return Results.NoContent();
-});
+})
+.WithName("DeleteRoom")
+.WithSummary("Delete a room")
+.WithDescription("Deletes an existing room.")
+.Produces(StatusCodes.Status204NoContent)
+.ProducesProblem(StatusCodes.Status404NotFound);
 
 
 // ----------------------------------------------------------
@@ -222,7 +255,12 @@ roomsGroup.MapGet("/{id:long}/bookings", async (
         .ToListAsync();
 
     return Results.Ok(bookings);
-});
+})
+.WithName("GetRoomBookings")
+.WithSummary("Get bookings for a room")
+.WithDescription("Returns all bookings associated with a specific room.")
+.Produces<List<Booking>>(StatusCodes.Status200OK)
+.ProducesProblem(StatusCodes.Status404NotFound);
 
 
 // ==========================================================
@@ -284,7 +322,14 @@ bookingsGroup.MapPost("/", async (
         $"/bookings/{booking.Id}",
         booking
     );
-});
+})
+.WithName("CreateBooking")
+.WithSummary("Create a booking")
+.WithDescription("Creates a booking after validating room availability, capacity, opening hours and booking duration.")
+.Produces<Booking>(StatusCodes.Status201Created)
+.ProducesProblem(StatusCodes.Status400BadRequest)
+.ProducesProblem(StatusCodes.Status404NotFound)
+.ProducesProblem(StatusCodes.Status409Conflict);
 
 
 // ----------------------------------------------------------
@@ -310,7 +355,12 @@ bookingsGroup.MapDelete("/{id:long}", async (
     await dbContext.SaveChangesAsync();
 
     return Results.NoContent();
-});
+})
+.WithName("DeleteBooking")
+.WithSummary("Delete a booking")
+.WithDescription("Deletes an existing booking.")
+.Produces(StatusCodes.Status204NoContent)
+.ProducesProblem(StatusCodes.Status404NotFound);
 
 
 // ==========================================================
