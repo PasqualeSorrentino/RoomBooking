@@ -12,7 +12,7 @@
 
 The project was created as a practical exercise to explore the transition from Java to C# and to build a complete backend application using the .NET ecosystem.
 
-The API currently includes room management, booking management, PostgreSQL persistence, EF Core migrations, configuration through the Options Pattern, custom request logging middleware, and automated tests.
+The API currently includes room and booking management, PostgreSQL persistence, EF Core migrations, structured error handling with Problem Details, OpenAPI documentation, Scalar UI, automated unit and integration tests, Docker support, reusable SQL analysis scripts, and demo seed data.
 
 ---
 
@@ -29,13 +29,22 @@ The API currently includes room management, booking management, PostgreSQL persi
 - Maximum booking duration
 - PostgreSQL persistence
 - Entity Framework Core migrations
-- Seed data for rooms
+- Initial room seed data
+- Demo database seed scripts
 - Dependency Injection
 - Options Pattern
 - Custom request logging middleware
-- xUnit tests
+- Centralized exception handling
+- RFC 7807-style Problem Details responses
+- OpenAPI documentation
+- Scalar API reference UI
+- xUnit unit tests
+- ASP.NET Core integration tests with `WebApplicationFactory`
 - LINQ queries
 - Async repository operations
+- Docker multi-stage build
+- Docker Compose stack with API + PostgreSQL
+- SQL analysis and `EXPLAIN ANALYZE` performance benchmark
 
 ---
 
@@ -48,7 +57,11 @@ The API currently includes room management, booking management, PostgreSQL persi
 - PostgreSQL 18
 - Npgsql
 - Docker
+- Docker Compose
 - xUnit
+- `Microsoft.AspNetCore.Mvc.Testing`
+- EF Core InMemory provider for integration tests
+- Scalar
 - Git / GitHub
 
 ---
@@ -60,11 +73,20 @@ RoomBooking/
 │
 ├── RoomBooking.Api/
 │   ├── DTOs/
+│   ├── Errors/
+│   │   └── GlobalExceptionHandler.cs
 │   ├── Middleware/
 │   ├── Program.cs
 │   └── appsettings.json
 │
+├── RoomBooking.Api.Tests/
+│   ├── BookingEndpointsTests.cs
+│   ├── CustomWebApplicationFactory.cs
+│   ├── HealthTests.cs
+│   └── RoomEndpointsTests.cs
+│
 ├── RoomBooking.Domain/
+│   ├── Exceptions/
 │   ├── Booking.cs
 │   ├── BookingOptions.cs
 │   ├── BookingService.cs
@@ -82,10 +104,24 @@ RoomBooking/
 │   └── RoomTest.cs
 │
 ├── RoomBooking.Infrastructure/
-│   └── Data/
-│       ├── Migrations/
-│       └── RoomBookingDbContext.cs
+│   ├── Data/
+│   │   ├── Migrations/
+│   │   └── RoomBookingDbContext.cs
+│   └── Repositories/
+│       └── EfBookingRepository.cs
 │
+├── docs/
+│   ├── queries.sql
+│   ├── explain.sql
+│   ├── seed.sql
+│   ├── seed-verify.sql
+│   ├── seed-cleanup.sql
+│   └── SEEDING.md
+│
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .env.example
 ├── RoomBooking.slnx
 └── README.md
 ```
@@ -137,6 +173,44 @@ Default configuration:
 
 ---
 
+## Error Handling
+
+The API uses centralized exception handling through `IExceptionHandler` and returns Problem Details responses.
+
+Main mappings:
+
+| Scenario | HTTP Status |
+|---|---:|
+| Invalid booking data | `400 Bad Request` |
+| Malformed request body | `400 Bad Request` |
+| Room not found | `404 Not Found` |
+| Booking overlap | `409 Conflict` |
+| Unexpected error | `500 Internal Server Error` |
+
+This keeps endpoint code focused on application logic while error responses remain consistent across the API.
+
+---
+
+## OpenAPI and Scalar
+
+OpenAPI is enabled in the Development environment.
+
+OpenAPI document:
+
+```text
+http://localhost:5102/openapi/v1.json
+```
+
+Scalar UI:
+
+```text
+http://localhost:5102/scalar/v1
+```
+
+Endpoints include summaries, descriptions, success response metadata, and documented problem response codes.
+
+---
+
 ## Database
 
 The application uses PostgreSQL through Entity Framework Core.
@@ -147,7 +221,7 @@ The database includes:
 - `Bookings`
 - `__EFMigrationsHistory`
 
-An index is defined on:
+A composite index is defined on:
 
 ```text
 RoomId + Start
@@ -155,13 +229,128 @@ RoomId + Start
 
 to support booking queries efficiently.
 
-The initial migration also seeds three rooms.
+The initial migration seeds three rooms.
+
+The application applies EF Core migrations automatically at startup when a relational provider is in use. During integration tests, the InMemory provider uses `EnsureCreated()` instead.
 
 ---
 
-## PostgreSQL with Docker
+## Demo Database Seed
 
-Example command used to start PostgreSQL 18:
+Additional demo data is available under `docs/`.
+
+On a clean database, the demo seed adds:
+
+- 5 additional rooms;
+- 30 realistic bookings;
+- 6 demo users;
+- bookings without room overlaps and compatible with the current domain rules.
+
+Populate the database:
+
+```powershell
+Get-Content .\docs\seed.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+Verify the data:
+
+```powershell
+Get-Content .\docs\seed-verify.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+Remove only the demo data:
+
+```powershell
+Get-Content .\docs\seed-cleanup.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+More details are available in `docs/SEEDING.md`.
+
+---
+
+## SQL Analysis
+
+The repository includes reusable SQL exercises and performance analysis scripts.
+
+`docs/queries.sql` includes queries for:
+
+- free rooms in a given time interval;
+- room occupancy percentage;
+- overlapping bookings through a self-join;
+- top users by total booked hours.
+
+`docs/explain.sql` contains a repeatable `EXPLAIN (ANALYZE, BUFFERS)` benchmark that compares the same booking query before and after the composite index on:
+
+```text
+(RoomId, Start)
+```
+
+The benchmark uses temporary synthetic data inside a transaction and rolls back the changes at the end.
+
+The PostgreSQL exclusion-constraint approach with `tstzrange` was also explored to prevent overlapping bookings directly at database level.
+
+---
+
+## Docker
+
+The API uses a multi-stage Docker build.
+
+Build the API image:
+
+```powershell
+docker build -t roombooking-api .
+```
+
+The project also includes `docker-compose.yml` with:
+
+- the ASP.NET Core API;
+- PostgreSQL 18;
+- a persistent PostgreSQL volume;
+- a database health check;
+- service dependency management.
+
+Create a local `.env` file from `.env.example` and provide a development password:
+
+```text
+POSTGRES_PASSWORD=your-local-password
+```
+
+The real `.env` file is excluded from version control.
+
+Start the complete stack:
+
+```powershell
+docker compose up --build
+```
+
+Run in background:
+
+```powershell
+docker compose up -d --build
+```
+
+Stop the stack:
+
+```powershell
+docker compose down
+```
+
+The API is exposed locally on:
+
+```text
+http://localhost:5102
+```
+
+---
+
+## PostgreSQL without Docker Compose
+
+PostgreSQL can also be started independently.
+
+Example:
 
 ```powershell
 docker run --name roombooking-postgres `
@@ -179,7 +368,7 @@ Do not store real credentials inside the repository.
 
 ## Configuration and Secrets
 
-During development, the PostgreSQL connection string is stored using **.NET User Secrets**.
+During local development, the PostgreSQL connection string can be stored using **.NET User Secrets**.
 
 Example:
 
@@ -194,7 +383,7 @@ Sensitive values are intentionally excluded from version control.
 
 ---
 
-## Run the Application
+## Run the Application Locally
 
 From the repository root:
 
@@ -208,7 +397,7 @@ Then:
 dotnet build RoomBooking.slnx
 ```
 
-Apply migrations:
+Apply migrations manually if needed:
 
 ```powershell
 dotnet ef database update `
@@ -222,7 +411,7 @@ Run the API:
 dotnet run --project .\RoomBooking.Api\RoomBooking.Api.csproj
 ```
 
-The API is currently configured locally on:
+The API is configured locally on:
 
 ```text
 http://localhost:5102
@@ -243,7 +432,16 @@ The test suite covers:
 - async repository behavior;
 - LINQ queries;
 - deferred execution;
-- pricing logic.
+- pricing logic;
+- application startup;
+- room endpoint integration;
+- valid booking creation;
+- booking overlap conflicts;
+- capacity validation;
+- missing-room responses;
+- booking deletion.
+
+Integration tests use `WebApplicationFactory<Program>` and replace PostgreSQL with the EF Core InMemory provider.
 
 ---
 
@@ -252,39 +450,45 @@ The test suite covers:
 Create a room:
 
 ```powershell
-curl `
-  -Method POST `
-  -Uri http://localhost:5102/rooms `
-  -ContentType "application/json" `
-  -Body '{
-    "name":"Training Room",
-    "capacity":12
-  }'
+$body = @{
+    name = "Training Room"
+    capacity = 12
+} | ConvertTo-Json
+
+Invoke-WebRequest `
+    -Method POST `
+    -Uri http://localhost:5102/rooms `
+    -ContentType "application/json" `
+    -Body $body
 ```
 
 Create a booking:
 
 ```powershell
-curl `
-  -Method POST `
-  -Uri http://localhost:5102/bookings `
-  -ContentType "application/json" `
-  -Body '{
-    "roomId":1,
-    "user":"John Doe",
-    "start":"2026-10-12T10:00:00",
-    "end":"2026-10-12T12:00:00",
-    "attendees":4
-  }'
+$body = @{
+    roomId = 1
+    user = "John Doe"
+    start = "2026-10-13T10:00:00"
+    end = "2026-10-13T12:00:00"
+    attendees = 4
+} | ConvertTo-Json
+
+Invoke-WebRequest `
+    -Method POST `
+    -Uri http://localhost:5102/bookings `
+    -ContentType "application/json" `
+    -Body $body
 ```
 
 ---
 
 ## Development Notes
 
-This project was developed incrementally using a test-driven approach.
+The project was developed incrementally using a test-oriented workflow.
 
-The domain was initially implemented and tested independently, then exposed through ASP.NET Core Minimal APIs and later connected to PostgreSQL using Entity Framework Core.
+The domain was initially implemented and tested independently, then exposed through ASP.NET Core Minimal APIs, connected to PostgreSQL with Entity Framework Core, extended with centralized API error handling and OpenAPI documentation, covered with integration tests, containerized with Docker, and complemented with SQL analysis and reproducible database demo data.
+
+Development is organized through short-lived Git branches and focused commits to keep the history easy to review and revert.
 
 ---
 
@@ -296,7 +500,7 @@ The domain was initially implemented and tested independently, then exposed thro
 
 Il progetto è stato realizzato come esercizio pratico per approfondire il passaggio da Java a C# e costruire un backend completo utilizzando l'ecosistema .NET.
 
-L'API comprende attualmente la gestione delle sale, delle prenotazioni, la persistenza su PostgreSQL, le migration di EF Core, la configurazione tramite Options Pattern, un middleware personalizzato per il logging delle richieste e test automatizzati.
+L'API comprende attualmente la gestione delle sale e delle prenotazioni, la persistenza su PostgreSQL, le migration di EF Core, la gestione centralizzata degli errori tramite Problem Details, la documentazione OpenAPI, l'interfaccia Scalar, test unitari e di integrazione, supporto Docker, script SQL riutilizzabili e dati demo per il database.
 
 ---
 
@@ -314,12 +518,22 @@ L'API comprende attualmente la gestione delle sale, delle prenotazioni, la persi
 - Persistenza PostgreSQL
 - Migration con Entity Framework Core
 - Seed iniziale delle sale
+- Script di seed demo
 - Dependency Injection
 - Options Pattern
 - Middleware personalizzato per il logging
-- Test con xUnit
+- Gestione centralizzata delle eccezioni
+- Risposte Problem Details
+- Documentazione OpenAPI
+- Interfaccia Scalar
+- Test unitari con xUnit
+- Test di integrazione con `WebApplicationFactory`
 - Query LINQ
 - Repository asincrono
+- Docker multi-stage
+- Docker Compose con API + PostgreSQL
+- Query SQL di analisi
+- Benchmark `EXPLAIN ANALYZE`
 
 ---
 
@@ -332,7 +546,11 @@ L'API comprende attualmente la gestione delle sale, delle prenotazioni, la persi
 - PostgreSQL 18
 - Npgsql
 - Docker
+- Docker Compose
 - xUnit
+- `Microsoft.AspNetCore.Mvc.Testing`
+- EF Core InMemory per i test di integrazione
+- Scalar
 - Git / GitHub
 
 ---
@@ -344,11 +562,20 @@ RoomBooking/
 │
 ├── RoomBooking.Api/
 │   ├── DTOs/
+│   ├── Errors/
+│   │   └── GlobalExceptionHandler.cs
 │   ├── Middleware/
 │   ├── Program.cs
 │   └── appsettings.json
 │
+├── RoomBooking.Api.Tests/
+│   ├── BookingEndpointsTests.cs
+│   ├── CustomWebApplicationFactory.cs
+│   ├── HealthTests.cs
+│   └── RoomEndpointsTests.cs
+│
 ├── RoomBooking.Domain/
+│   ├── Exceptions/
 │   ├── Booking.cs
 │   ├── BookingOptions.cs
 │   ├── BookingService.cs
@@ -366,10 +593,24 @@ RoomBooking/
 │   └── RoomTest.cs
 │
 ├── RoomBooking.Infrastructure/
-│   └── Data/
-│       ├── Migrations/
-│       └── RoomBookingDbContext.cs
+│   ├── Data/
+│   │   ├── Migrations/
+│   │   └── RoomBookingDbContext.cs
+│   └── Repositories/
+│       └── EfBookingRepository.cs
 │
+├── docs/
+│   ├── queries.sql
+│   ├── explain.sql
+│   ├── seed.sql
+│   ├── seed-verify.sql
+│   ├── seed-cleanup.sql
+│   └── SEEDING.md
+│
+├── Dockerfile
+├── docker-compose.yml
+├── .dockerignore
+├── .env.example
 ├── RoomBooking.slnx
 └── README.md
 ```
@@ -421,6 +662,44 @@ Configurazione predefinita:
 
 ---
 
+## Gestione degli errori
+
+L'API utilizza una gestione centralizzata delle eccezioni tramite `IExceptionHandler` e restituisce risposte Problem Details.
+
+Mappature principali:
+
+| Scenario | Stato HTTP |
+|---|---:|
+| Dati di prenotazione non validi | `400 Bad Request` |
+| Body della richiesta non valido | `400 Bad Request` |
+| Sala inesistente | `404 Not Found` |
+| Sovrapposizione di prenotazioni | `409 Conflict` |
+| Errore inatteso | `500 Internal Server Error` |
+
+In questo modo gli endpoint possono concentrarsi sulla logica applicativa e le risposte di errore rimangono uniformi.
+
+---
+
+## OpenAPI e Scalar
+
+OpenAPI è attivo nell'ambiente Development.
+
+Documento OpenAPI:
+
+```text
+http://localhost:5102/openapi/v1.json
+```
+
+Interfaccia Scalar:
+
+```text
+http://localhost:5102/scalar/v1
+```
+
+Gli endpoint espongono summary, descrizioni, codici di successo e principali risposte Problem Details.
+
+---
+
 ## Database
 
 L'applicazione utilizza PostgreSQL tramite Entity Framework Core.
@@ -431,7 +710,7 @@ Il database contiene:
 - `Bookings`
 - `__EFMigrationsHistory`
 
-È inoltre presente un indice composto su:
+È presente un indice composto su:
 
 ```text
 RoomId + Start
@@ -439,13 +718,134 @@ RoomId + Start
 
 per rendere più efficienti le query sulle prenotazioni.
 
-La migration iniziale inserisce anche tre sale di esempio.
+La migration iniziale inserisce tre sale.
+
+All'avvio dell'applicazione le migration EF Core vengono applicate automaticamente quando viene utilizzato un provider relazionale. Durante i test di integrazione, il provider InMemory utilizza invece `EnsureCreated()`.
 
 ---
 
-## PostgreSQL con Docker
+## Dati demo del database
 
-Esempio di comando per avviare PostgreSQL 18:
+Nella cartella `docs/` sono disponibili script per popolare il database con dati demo.
+
+Su un database pulito il seed aggiunge:
+
+- 5 sale aggiuntive;
+- 30 prenotazioni realistiche;
+- 6 utenti demo;
+- prenotazioni compatibili con le regole correnti e senza sovrapposizioni per sala.
+
+Popolamento:
+
+```powershell
+Get-Content .\docs\seed.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+Verifica:
+
+```powershell
+Get-Content .\docs\seed-verify.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+Rimozione dei soli dati demo:
+
+```powershell
+Get-Content .\docs\seed-cleanup.sql |
+    docker compose exec -T postgres psql -U roombooking -d roombooking
+```
+
+Ulteriori informazioni sono disponibili in `docs/SEEDING.md`.
+
+---
+
+## Analisi SQL
+
+Il repository contiene query SQL riutilizzabili e script dedicati all'analisi delle performance.
+
+`docs/queries.sql` comprende query per:
+
+- sale libere in un determinato intervallo;
+- percentuale di occupazione delle sale;
+- ricerca delle prenotazioni sovrapposte tramite self-join;
+- top utenti per ore complessivamente prenotate.
+
+`docs/explain.sql` contiene un benchmark ripetibile con:
+
+```text
+EXPLAIN (ANALYZE, BUFFERS)
+```
+
+che confronta la stessa query prima e dopo l'indice composto:
+
+```text
+(RoomId, Start)
+```
+
+Il benchmark utilizza dati sintetici temporanei all'interno di una transazione e ripristina il database con `ROLLBACK`.
+
+È stato inoltre analizzato l'uso di un exclusion constraint PostgreSQL con `tstzrange` per impedire le sovrapposizioni direttamente a livello database.
+
+---
+
+## Docker
+
+L'API utilizza una build Docker multi-stage.
+
+Build dell'immagine:
+
+```powershell
+docker build -t roombooking-api .
+```
+
+Il progetto include inoltre `docker-compose.yml` con:
+
+- API ASP.NET Core;
+- PostgreSQL 18;
+- volume persistente;
+- health check PostgreSQL;
+- dipendenza dell'API dallo stato di salute del database.
+
+Crea localmente un file `.env` partendo da `.env.example`:
+
+```text
+POSTGRES_PASSWORD=your-local-password
+```
+
+Il file `.env` reale è escluso dal versionamento.
+
+Avvio dello stack:
+
+```powershell
+docker compose up --build
+```
+
+Avvio in background:
+
+```powershell
+docker compose up -d --build
+```
+
+Arresto:
+
+```powershell
+docker compose down
+```
+
+L'API viene esposta localmente su:
+
+```text
+http://localhost:5102
+```
+
+---
+
+## PostgreSQL senza Docker Compose
+
+È possibile avviare PostgreSQL anche separatamente.
+
+Esempio:
 
 ```powershell
 docker run --name roombooking-postgres `
@@ -463,7 +863,7 @@ Le credenziali reali non devono essere salvate nel repository.
 
 ## Configurazione e secrets
 
-Durante lo sviluppo la connection string PostgreSQL viene salvata tramite **.NET User Secrets**.
+Durante lo sviluppo locale la connection string PostgreSQL può essere salvata tramite **.NET User Secrets**.
 
 Esempio:
 
@@ -478,7 +878,7 @@ I valori sensibili sono esclusi dal versionamento Git.
 
 ---
 
-## Avvio del progetto
+## Avvio locale del progetto
 
 Dalla root del repository:
 
@@ -492,7 +892,7 @@ Poi:
 dotnet build RoomBooking.slnx
 ```
 
-Applica le migration:
+Se necessario, applica manualmente le migration:
 
 ```powershell
 dotnet ef database update `
@@ -506,7 +906,7 @@ Avvia l'API:
 dotnet run --project .\RoomBooking.Api\RoomBooking.Api.csproj
 ```
 
-L'API è attualmente configurata localmente su:
+L'API è configurata localmente su:
 
 ```text
 http://localhost:5102
@@ -527,7 +927,16 @@ La suite di test copre:
 - repository asincrono;
 - query LINQ;
 - deferred execution;
-- logica delle tariffe.
+- logica delle tariffe;
+- avvio dell'applicazione;
+- integrazione degli endpoint delle sale;
+- creazione valida di una prenotazione;
+- conflitti dovuti a sovrapposizioni;
+- controllo della capienza;
+- sala inesistente;
+- cancellazione della prenotazione.
+
+I test di integrazione utilizzano `WebApplicationFactory<Program>` e sostituiscono PostgreSQL con il provider EF Core InMemory.
 
 ---
 
@@ -536,30 +945,34 @@ La suite di test copre:
 Creazione di una sala:
 
 ```powershell
-curl `
-  -Method POST `
-  -Uri http://localhost:5102/rooms `
-  -ContentType "application/json" `
-  -Body '{
-    "name":"Training Room",
-    "capacity":12
-  }'
+$body = @{
+    name = "Training Room"
+    capacity = 12
+} | ConvertTo-Json
+
+Invoke-WebRequest `
+    -Method POST `
+    -Uri http://localhost:5102/rooms `
+    -ContentType "application/json" `
+    -Body $body
 ```
 
 Creazione di una prenotazione:
 
 ```powershell
-curl `
-  -Method POST `
-  -Uri http://localhost:5102/bookings `
-  -ContentType "application/json" `
-  -Body '{
-    "roomId":1,
-    "user":"Mario Rossi",
-    "start":"2026-10-12T10:00:00",
-    "end":"2026-10-12T12:00:00",
-    "attendees":4
-  }'
+$body = @{
+    roomId = 1
+    user = "Mario Rossi"
+    start = "2026-10-13T10:00:00"
+    end = "2026-10-13T12:00:00"
+    attendees = 4
+} | ConvertTo-Json
+
+Invoke-WebRequest `
+    -Method POST `
+    -Uri http://localhost:5102/bookings `
+    -ContentType "application/json" `
+    -Body $body
 ```
 
 ---
@@ -568,4 +981,6 @@ curl `
 
 Il progetto è stato sviluppato in modo incrementale seguendo un approccio orientato ai test.
 
-Il dominio è stato inizialmente implementato e testato in modo indipendente, successivamente esposto tramite ASP.NET Core Minimal APIs e infine collegato a PostgreSQL attraverso Entity Framework Core.
+Il dominio è stato inizialmente implementato e testato in modo indipendente, successivamente esposto tramite ASP.NET Core Minimal APIs, collegato a PostgreSQL attraverso Entity Framework Core, esteso con gestione centralizzata degli errori e documentazione OpenAPI, coperto tramite test di integrazione, containerizzato con Docker e completato con analisi SQL e dati demo riproducibili.
+
+Lo sviluppo viene organizzato tramite branch Git brevi e commit focalizzati, così da mantenere una cronologia semplice da revisionare e, se necessario, da ripristinare.
