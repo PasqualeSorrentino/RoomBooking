@@ -368,3 +368,7 @@ bookingsGroup.MapDelete("/{id:long}", async (
 // ==========================================================
 
 app.Run();
+
+public partial class Program
+{
+}
